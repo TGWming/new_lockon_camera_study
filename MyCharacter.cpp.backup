@@ -1,0 +1,2204 @@
+// Fill out your copyright notice in the Description page of Project Settings.
+
+#include "MyCharacter.h"
+#include "Components/InputComponent.h"
+#include "Components/SphereComponent.h"
+#include "Camera/CameraComponent.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Engine/World.h"
+#include "Kismet/KismetMathLibrary.h"
+#include "DrawDebugHelpers.h"
+#include "Blueprint/UserWidget.h"
+#include "Components/WidgetComponent.h"
+#include "EngineUtils.h"
+#include "TimerManager.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "UObject/UObjectGlobals.h"
+#include "Engine/Engine.h"
+#include "UObject/StructOnScope.h"
+
+// Sets default values
+AMyCharacter::AMyCharacter()
+{
+	// Set this character to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+	PrimaryActorTick.bCanEverTick = true;
+
+	// ==================== ��ʼ������ ====================
+	bIsLockedOn = false;
+	CurrentLockOnTarget = nullptr;
+	LockOnRange = 2000.0f;  // ���ӵ�20�ף����ӽ��ڻ�3������
+	LockOnAngle = 120.0f;   // ������Ұ�Ƕȵ���60�ȣ�����������
+	NormalWalkSpeed = 600.0f;
+	LockedWalkSpeed = 600.0f;
+	ForwardInputValue = 0.0f;
+	RightInputValue = 0.0f;
+	LastFindTargetsTime = 0.0f;
+	
+	// ==================== ����������������Ʋ�����ʼ�� ====================
+	CameraInterpSpeed = 5.0f;           // Ĭ�ϲ�ֵ�ٶ�
+	bEnableSmoothCameraTracking = true; // Ĭ������ƽ������
+	CameraTrackingMode = 0;             // Ĭ����ȫ����ģʽ
+	
+	// Ŀ��λ��ƫ�Ƴ�ʼ������Ӧ��ͼ�е�Vector������
+	TargetLocationOffset = FVector(0.0f, 0.0f, -250.0f);
+
+	// ==================== ���Կ��Ƴ�ʼ�� ====================
+	bEnableCameraDebugLogs = false;     // Ĭ�Ϲر��������
+	bEnableLockOnDebugLogs = false;     // Ĭ�Ϲر���������
+	
+	// ����״̬��ʼ��
+	bRightStickLeftPressed = false;
+	bRightStickRightPressed = false;
+	LastRightStickX = 0.0f;
+	
+	// Ŀ���л�״̬��ʼ��
+	bJustSwitchedTarget = false;
+	TargetSwitchCooldown = 0.5f;
+	LastTargetSwitchTime = 0.0f;
+
+	// �����л�ƽ��������ʼ��
+	bIsSmoothSwitching = false;
+	SmoothSwitchStartTime = 0.0f;
+	SmoothSwitchStartRotation = FRotator::ZeroRotator;
+	SmoothSwitchTargetRotation = FRotator::ZeroRotator;
+	bShouldSmoothSwitchCamera = false;
+	bShouldSmoothSwitchCharacter = false;
+
+	// ���������Ƴ�ʼ��
+	bShouldCameraFollowTarget = true;
+	bShouldCharacterRotateToTarget = true; // ��ɫ����ת����Ƴ�ʼ��
+	bPlayerIsMoving = false;
+
+	// ��������ϵͳ��ʼ��
+	bIsCameraAutoCorrection = false;
+	CameraCorrectionStartTime = 0.0f;
+	CameraCorrectionStartRotation = FRotator::ZeroRotator;
+	CameraCorrectionTargetRotation = FRotator::ZeroRotator;
+	DelayedCorrectionTarget = nullptr;
+
+	// UMG��س�ʼ��
+	LockOnWidgetClass = nullptr;
+	LockOnWidgetInstance = nullptr;
+	PreviousLockOnTarget = nullptr;
+
+	// ������ó�ʼ��
+	bIsSmoothCameraReset = false;
+	SmoothResetStartTime = 0.0f;
+	SmoothResetStartRotation = FRotator::ZeroRotator;
+	SmoothResetTargetRotation = FRotator::ZeroRotator;
+
+	// ==================== SocketͶ��ϵͳ��ʼ�� ====================
+	TargetSocketName = TEXT("Spine2Socket");
+	ProjectionScale = 1.0f;
+	SocketOffset = FVector(0.0f, 0.0f, 50.0f);
+	bUseSocketProjection = true; // Ĭ������SocketͶ��
+
+	// ==================== ���������� ====================
+	// �������ɱ����
+	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom->SetupAttachment(RootComponent);
+	CameraBoom->TargetArmLength = 450.0f; // �������
+	CameraBoom->bUsePawnControlRotation = true; // �����������ת
+
+	// ��������۵ĳ�ʼ�Ƕȣ����ӽǶȣ�
+	CameraBoom->SetRelativeRotation(FRotator(-15.0f, 0.0f, 0.0f));
+
+	// ����������
+	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
+	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+	FollowCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 50.0f));
+	FollowCamera->bUsePawnControlRotation = false; // �����������ת
+
+	// ==================== ��������������� ====================
+	LockOnDetectionSphere = CreateDefaultSubobject<USphereComponent>(TEXT("LockOnDetectionSphere"));
+	LockOnDetectionSphere->SetupAttachment(RootComponent);
+	LockOnDetectionSphere->SetSphereRadius(LockOnRange);
+	LockOnDetectionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	LockOnDetectionSphere->SetCollisionResponseToAllChannels(ECR_Ignore);
+	LockOnDetectionSphere->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+
+	// ==================== ���ý�ɫ�ƶ����� ====================
+	// ���ý�ɫ�����������ת
+	bUseControllerRotationPitch = false;
+	bUseControllerRotationYaw = false;
+	bUseControllerRotationRoll = false;
+
+	// ���ý�ɫ�ƶ����
+	GetCharacterMovement()->bOrientRotationToMovement = true; // ��ɫ�����ƶ�����
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f); // ��ת�ٶ�
+	GetCharacterMovement()->MaxWalkSpeed = NormalWalkSpeed;
+}
+
+// Called when the game starts or when spawned
+void AMyCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+	
+	// ���ó�ʼ�ƶ��ٶ�
+	GetCharacterMovement()->MaxWalkSpeed = NormalWalkSpeed;
+	
+	// ���¼������뾶
+	if (LockOnDetectionSphere)
+	{
+		LockOnDetectionSphere->SetSphereRadius(LockOnRange);
+	}
+}
+
+// Called every frame
+void AMyCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	// ����ƽ��������ã����ȼ���ߣ���Ϊ�Ƿ�����״̬��
+	if (bIsSmoothCameraReset)
+	{
+		UpdateSmoothCameraReset();
+		return; // �����ڼ䲻ִ����������߼�
+	}
+
+	// ��������Զ����������ȼ���ߣ�
+	if (bIsCameraAutoCorrection)
+	{
+		UpdateCameraAutoCorrection();
+	}
+
+	// ��������״̬
+	if (bIsLockedOn)
+	{
+		UpdateLockOnTarget();
+		
+		// ����ƽ���л�״̬�����ȼ�������ͨ������£�
+		if (bIsSmoothSwitching)
+		{
+			UpdateSmoothTargetSwitch();
+		}
+		else if (!bIsCameraAutoCorrection) // ֻ�ڷ��Զ�����״̬�²�ִ����ͨ�������
+		{
+			// ����������������߼�
+			UpdateLockOnCamera();
+		}
+		
+		// ����UMG����UI������SocketͶ�䣩
+		UpdateLockOnWidget();
+
+		// ���������Ϣ���ɿ��ƣ�
+		if (bEnableCameraDebugLogs && CurrentLockOnTarget)
+		{
+			UE_LOG(LogTemp, VeryVerbose, TEXT("LockOn Active: Target=%s, CameraFollow=%s, CharacterRotate=%s"), 
+				*CurrentLockOnTarget->GetName(),
+				bShouldCameraFollowTarget ? TEXT("YES") : TEXT("NO"),
+				bShouldCharacterRotateToTarget ? TEXT("YES") : TEXT("NO"));
+		}
+	}
+
+	// ���ڲ��ҿ�����Ŀ�꣨����Ƶ�����Ż����ܣ�
+	// ��ƽ���л��ڼ���ͣĿ����������ֹ��ͻ
+	if (!bIsSmoothSwitching)
+	{
+		float CurrentTime = GetWorld()->GetTimeSeconds();
+		if (CurrentTime - LastFindTargetsTime > TARGET_SEARCH_INTERVAL)
+		{
+			FindLockOnCandidates();
+			LastFindTargetsTime = CurrentTime;
+
+			// ����������Ϣ���ɿ��ƣ�
+			if (bEnableLockOnDebugLogs)
+			{
+				UE_LOG(LogTemp, Verbose, TEXT("Target search completed: Found %d candidates"), LockOnCandidates.Num());
+			}
+		}
+	}
+}
+
+// Called to bind functionality to input
+void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	if (!PlayerInputComponent)
+	{
+		UE_LOG(LogTemp, Error, TEXT("PlayerInputComponent is null!"));
+		return;
+	}
+
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	// ���ƶ�����
+	PlayerInputComponent->BindAxis("MoveForward", this, &AMyCharacter::MoveForward);
+	PlayerInputComponent->BindAxis("MoveRight", this, &AMyCharacter::MoveRight);
+
+	// ���������
+	PlayerInputComponent->BindAxis("Turn", this, &AMyCharacter::Turn);
+	PlayerInputComponent->BindAxis("LookUp", this, &AMyCharacter::LookUp);
+
+	// ����Ծ����
+	PlayerInputComponent->BindAction("Jump", IE_Pressed, this, &AMyCharacter::StartJump);
+	PlayerInputComponent->BindAction("Jump", IE_Released, this, &AMyCharacter::StopJump);
+
+	// ==================== ��������� ====================
+	// �������� - ֧����ҡ�˰��º�����м�
+	PlayerInputComponent->BindAction("LockOn", IE_Pressed, this, &AMyCharacter::HandleLockOnButton);
+	
+	// ��ҡ��ˮƽ���루�����л�Ŀ�꣩
+	PlayerInputComponent->BindAxis("RightStickX", this, &AMyCharacter::HandleRightStickX);
+	
+	// �������Ҽ�ͷ�л�Ŀ��
+	PlayerInputComponent->BindAction("SwitchTargetLeft", IE_Pressed, this, &AMyCharacter::SwitchLockOnTargetLeft);
+	PlayerInputComponent->BindAction("SwitchTargetRight", IE_Pressed, this, &AMyCharacter::SwitchLockOnTargetRight);
+
+	// ==================== ��������� ====================
+	// ���ӵ��԰�key (F��) ����������
+	PlayerInputComponent->BindAction("DebugInput", IE_Pressed, this, &AMyCharacter::DebugInputTest);
+	
+	// ��ӡ��ǰ��״̬
+	UE_LOG(LogTemp, Warning, TEXT("Input bindings set up successfully"));
+}
+
+// ==================== �ƶ�����ʵ�� ====================
+void AMyCharacter::MoveForward(float Value)
+{
+	ForwardInputValue = Value;
+
+	// �������Ƿ����ƶ���������������߼���
+	bPlayerIsMoving = (FMath::Abs(Value) > 0.1f || FMath::Abs(RightInputValue) > 0.1f);
+
+	// �����ҿ�ʼ�ƶ��Ҵ�������״̬������������������ת��
+	if (bPlayerIsMoving && bIsLockedOn)
+	{
+		// ������ڽ���ƽ���л�������ֹͣ���ָ���������
+		if (bIsSmoothSwitching)
+		{
+			bIsSmoothSwitching = false;
+			bShouldSmoothSwitchCamera = false;
+			bShouldSmoothSwitchCharacter = false;
+			UE_LOG(LogTemp, Warning, TEXT("Player movement interrupted smooth target switch"));
+		}
+		
+		// ������ڽ�������Զ�����������ֹͣ
+		if (bIsCameraAutoCorrection)
+		{
+			bIsCameraAutoCorrection = false;
+			DelayedCorrectionTarget = nullptr;
+			UE_LOG(LogTemp, Warning, TEXT("Player movement interrupted camera auto correction"));
+		}
+		
+		if (!bShouldCameraFollowTarget)
+		{
+			bShouldCameraFollowTarget = true;
+			bShouldCharacterRotateToTarget = true; // ͬʱ��������ת��
+			UE_LOG(LogTemp, Warning, TEXT("Player started moving - enabling camera follow and character rotation"));
+		}
+	}
+
+	if (Value != 0.0f && Controller)
+	{
+		if (bIsLockedOn)
+		{
+			// ����״̬�£�����ڽ�ɫ�����ƶ�
+			const FVector Direction = GetActorForwardVector();
+			AddMovementInput(Direction, Value);
+		}
+		else
+		{
+			// ����״̬�£��������������ƶ�
+			const FRotator Rotation = Controller->GetControlRotation();
+			const FRotator YawRotation(0, Rotation.Yaw, 0);
+			const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+			AddMovementInput(Direction, Value);
+		}
+	}
+}
+
+void AMyCharacter::MoveRight(float Value)
+{
+	RightInputValue = Value;
+
+	// �������Ƿ����ƶ���������������߼���
+	bPlayerIsMoving = (FMath::Abs(Value) > 0.1f || FMath::Abs(ForwardInputValue) > 0.1f);
+
+	// �����ҿ�ʼ�ƶ��Ҵ�������״̬������������������ת��
+	if (bPlayerIsMoving && bIsLockedOn)
+	{
+		// ������ڽ���ƽ���л�������ֹͣ���ָ���������
+		if (bIsSmoothSwitching)
+		{
+			bIsSmoothSwitching = false;
+			bShouldSmoothSwitchCamera = false;
+			bShouldSmoothSwitchCharacter = false;
+			UE_LOG(LogTemp, Warning, TEXT("Player movement interrupted smooth target switch"));
+		}
+		
+		// ������ڽ�������Զ�����������ֹͣ
+		if (bIsCameraAutoCorrection)
+		{
+			bIsCameraAutoCorrection = false;
+			DelayedCorrectionTarget = nullptr;
+			UE_LOG(LogTemp, Warning, TEXT("Player movement interrupted camera auto correction"));
+		}
+		
+		if (!bShouldCameraFollowTarget)
+		{
+			bShouldCameraFollowTarget = true;
+			bShouldCharacterRotateToTarget = true; // ͬʱ��������ת��
+			UE_LOG(LogTemp, Warning, TEXT("Player started moving - enabling camera follow and character rotation"));
+		}
+	}
+
+	if (Value != 0.0f && Controller)
+	{
+		if (bIsLockedOn)
+		{
+			// ����״̬�£�����ڽ�ɫ�����ƶ�
+			const FVector Direction = GetActorRightVector();
+			AddMovementInput(Direction, Value);
+		}
+		else
+		{
+			// ����״̬�£��������������ƶ�
+			const FRotator Rotation = Controller->GetControlRotation();
+			const FRotator YawRotation(0, Rotation.Yaw, 0);
+			const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+			AddMovementInput(Direction, Value);
+		}
+	}
+}
+
+void AMyCharacter::StartJump()
+{
+	Jump();
+}
+
+void AMyCharacter::StopJump()
+{
+	StopJumping();
+}
+
+// ==================== ������� ====================
+void AMyCharacter::Turn(float Rate)
+{
+	// ����״̬����ȫ��ֹ��ҵ�ˮƽ�������
+	if (bIsLockedOn)
+	{
+		// ������״̬�£���Ȼ���������ֹͣ�Զ��������
+		if (FMath::Abs(Rate) > 0.1f)
+		{
+			// ��������������ͼ��ֹͣ�Զ�������ƣ�������������
+			if (bIsCameraAutoCorrection)
+			{
+				bIsCameraAutoCorrection = false;
+				DelayedCorrectionTarget = nullptr;
+				if (bEnableCameraDebugLogs)
+				{
+					UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping auto correction"));
+				}
+			}
+			
+			if (bIsSmoothCameraReset)
+			{
+				bIsSmoothCameraReset = false;
+				if (bEnableCameraDebugLogs)
+				{
+					UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping smooth camera reset"));
+				}
+			}
+			
+			// ����״̬�²�����������룬������ȫ����
+			// AddControllerYawInput(Rate); // ע�͵�����
+		}
+		return; // ����״̬��ֱ�ӷ���
+	}
+
+	// ������״̬�µ������������
+	if (FMath::Abs(Rate) > 0.1f)
+	{
+		// ��������������ͼ��ֹͣ�Զ��������
+		if (bIsCameraAutoCorrection)
+		{
+			bIsCameraAutoCorrection = false;
+			DelayedCorrectionTarget = nullptr;
+			if (bEnableCameraDebugLogs)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping auto correction"));
+			}
+		}
+		
+		if (bIsSmoothCameraReset)
+		{
+			bIsSmoothCameraReset = false;
+			if (bEnableCameraDebugLogs)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping smooth camera reset"));
+			}
+		}
+	}
+	
+	// ������״̬��������ҿ������
+	AddControllerYawInput(Rate);
+}
+
+void AMyCharacter::LookUp(float Rate)
+{
+	// ����״̬����ȫ��ֹ��ҵĴ�ֱ�������
+	if (bIsLockedOn)
+	{
+		// ������״̬�£���Ȼ���������ֹͣ�Զ��������
+		if (FMath::Abs(Rate) > 0.1f)
+		{
+			// ��������������ͼ��ֹͣ�Զ�������ƣ�������������
+			if (bIsCameraAutoCorrection)
+			{
+				bIsCameraAutoCorrection = false;
+				DelayedCorrectionTarget = nullptr;
+				if (bEnableCameraDebugLogs)
+				{
+					UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping auto correction"));
+				}
+			}
+			
+			if (bIsSmoothCameraReset)
+			{
+				bIsSmoothCameraReset = false;
+				if (bEnableCameraDebugLogs)
+				{
+					UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping smooth camera reset"));
+				}
+			}
+			
+			// ����״̬�²�����������룬������ȫ����
+			// AddControllerPitchInput(Rate); // ע�͵�����
+		}
+		return; // ����״̬��ֱ�ӷ���
+	}
+
+	// ������״̬�µ������������
+	if (FMath::Abs(Rate) > 0.1f)
+	{
+		// ��������������ͼ��ֹͣ�Զ��������
+		if (bIsCameraAutoCorrection)
+		{
+			bIsCameraAutoCorrection = false;
+			DelayedCorrectionTarget = nullptr;
+			if (bEnableCameraDebugLogs)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping auto correction"));
+			}
+		}
+		
+		if (bIsSmoothCameraReset)
+		{
+			bIsSmoothCameraReset = false;
+			if (bEnableCameraDebugLogs)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Player camera input detected - stopping smooth camera reset"));
+			}
+		}
+	}
+	
+	// ������״̬��������ҿ������
+	AddControllerPitchInput(Rate);
+}
+
+// ==================== ����ϵͳʵ�� ====================
+void AMyCharacter::ToggleLockOn()
+{
+	if (bEnableLockOnDebugLogs)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ToggleLockOn called - Current state: %s"), 
+			bIsLockedOn ? TEXT("LOCKED") : TEXT("UNLOCKED"));
+	}
+	
+	if (bIsLockedOn)
+	{
+		// �����UI�������� - �ڵ���CancelLockOn֮ǰǿ����������UI
+		if (bEnableLockOnDebugLogs)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Cancelling lock-on..."));
+		}
+		
+		HideAllLockOnWidgets();
+		if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport()) 
+		{
+			LockOnWidgetInstance->RemoveFromViewport();
+			LockOnWidgetInstance = nullptr;
+		}
+		
+		// ȡ���������߼����ֲ���
+		CancelLockOn();
+	}
+	else
+	{
+		if (bEnableLockOnDebugLogs)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Attempting to start lock-on..."));
+		}
+		
+		FindLockOnCandidates();
+		
+		if (bEnableLockOnDebugLogs)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Found %d lock-on candidates"), LockOnCandidates.Num());
+		}
+		
+		// ֻ������������ڵ�Ŀ��
+		AActor* SectorTarget = TryGetSectorLockTarget();
+		
+		if (SectorTarget)
+		{
+			if (bEnableLockOnDebugLogs)
+			{
+				UE_LOG(LogTemp, Log, TEXT("Found sector target: %s"), *SectorTarget->GetName());
+			}
+			// ���1������������������Χ�� �� ��������
+			StartLockOn(SectorTarget);
+		}
+		else
+		{
+			if (bEnableLockOnDebugLogs)
+			{
+				UE_LOG(LogTemp, Log, TEXT("No valid sector target found, performing camera reset"));
+			}
+			// ���2�������Ƿ��е��ˣ���ִ�о�ͷ����
+			PerformSimpleCameraReset();
+		}
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("=== ToggleLockOn complete ==="));
+}
+
+// ������ִ�м򵥵�������ã��޸�Ϊƽ���汾��
+void AMyCharacter::PerformSimpleCameraReset()
+{
+	StartSmoothCameraReset();
+}
+
+// ��������ʼƽ���������
+void AMyCharacter::StartSmoothCameraReset()
+{
+	if (!Controller)
+		return;
+		
+	// ����Ŀ����ת����ɫ��ǰ������΢���ϣ�
+	FRotator TargetRotation = GetActorRotation() + FRotator(-10.0f, 0.0f, 0.0f);
+	
+	// ����ƽ������
+	bIsSmoothCameraReset = true;
+	SmoothResetStartTime = GetWorld()->GetTimeSeconds();
+	SmoothResetStartRotation = Controller->GetControlRotation();
+	SmoothResetTargetRotation = TargetRotation;
+	
+	UE_LOG(LogTemp, Warning, TEXT("Started smooth camera reset from %s to %s"), 
+		*SmoothResetStartRotation.ToString(), *SmoothResetTargetRotation.ToString());
+}
+
+// ����������ƽ���������
+void AMyCharacter::UpdateSmoothCameraReset()
+{
+	if (!bIsSmoothCameraReset || !Controller)
+		return;
+
+	float DeltaTime = GetWorld()->GetDeltaSeconds();
+	
+	// ƽ����ֵ��Ŀ����ת
+	FRotator CurrentRotation = Controller->GetControlRotation();
+	FRotator NewRotation = FMath::RInterpTo(CurrentRotation, SmoothResetTargetRotation, 
+		DeltaTime, CAMERA_RESET_SPEED);
+	
+	Controller->SetControlRotation(NewRotation);
+
+	// ����Ƿ�������� - ����ǶȲ���
+	float YawDiff = FMath::Abs(FRotator::NormalizeAxis(NewRotation.Yaw - SmoothResetTargetRotation.Yaw));
+	float PitchDiff = FMath::Abs(FRotator::NormalizeAxis(NewRotation.Pitch - SmoothResetTargetRotation.Pitch));
+	float TotalAngleDiff = YawDiff + PitchDiff;
+	
+	if (TotalAngleDiff < CAMERA_RESET_ANGLE_THRESHOLD)
+	{
+		// �������
+		bIsSmoothCameraReset = false;
+		Controller->SetControlRotation(SmoothResetTargetRotation); // ȷ����ȷ����Ŀ����ת
+		UE_LOG(LogTemp, Warning, TEXT("Smooth camera reset completed"));
+	}
+}
+
+// ��������ʼ����Ŀ��
+void AMyCharacter::StartLockOn(AActor* Target)
+{
+	if (!Target)
+		return;
+		
+	bIsLockedOn = true;
+	CurrentLockOnTarget = Target;
+	
+	// ��������״̬�µ��ƶ��ٶ�
+	GetCharacterMovement()->MaxWalkSpeed = LockedWalkSpeed;
+	GetCharacterMovement()->bOrientRotationToMovement = false;
+	
+	// ��ʾ����UI
+	ShowLockOnWidget();
+	
+	UE_LOG(LogTemp, Warning, TEXT("Started lock-on with target: %s"), *Target->GetName());
+}
+
+// ������ȡ������
+void AMyCharacter::CancelLockOn()
+{
+	if (!bIsLockedOn)
+		return;
+	
+	// ǿ�����ص�ǰĿ������к�ѡĿ���UI�����ȼ���ߣ�
+	HideAllLockOnWidgets();
+	
+	// ���Ᵽ�գ��������Ļ�ռ�UIҲ����
+	if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+	{
+		LockOnWidgetInstance->RemoveFromViewport();
+		LockOnWidgetInstance = nullptr;
+	}
+	
+	// ��������״̬
+	bIsLockedOn = false;
+	PreviousLockOnTarget = CurrentLockOnTarget;
+	CurrentLockOnTarget = nullptr;
+	
+	// �����������״̬
+	bShouldCameraFollowTarget = true;
+	bShouldCharacterRotateToTarget = true;
+	
+	// ֹͣ�κ����ڽ��е�ƽ���л����������
+	bIsSmoothSwitching = false;
+	bShouldSmoothSwitchCamera = false;
+	bShouldSmoothSwitchCharacter = false;
+	bIsCameraAutoCorrection = false;
+	DelayedCorrectionTarget = nullptr;
+	
+	// �ָ������ƶ�����
+	GetCharacterMovement()->bOrientRotationToMovement = true;
+	GetCharacterMovement()->MaxWalkSpeed = NormalWalkSpeed;
+	
+	UE_LOG(LogTemp, Warning, TEXT("Lock-on cancelled"));
+}
+
+// �������������
+void AMyCharacter::ResetCamera()
+{
+	// �����������ֻ�ǵ��ü����ã����ּ�����
+	PerformSimpleCameraReset();
+}
+
+// �Ƴ� StartCameraReset() �ĵ��ã���Ϊ�������������
+// �����Ҫ�������������������ʵ�֣�
+void AMyCharacter::StartCameraReset(const FRotator& TargetRotation)
+{
+	if (!Controller)
+		return;
+		
+	// ֱ�����������ת�����߿�������ƽ����ֵ
+	Controller->SetControlRotation(TargetRotation);
+	
+	UE_LOG(LogTemp, Warning, TEXT("Camera reset to target rotation: %s"), *TargetRotation.ToString());
+}
+
+// ==================== ���º��� ====================
+void AMyCharacter::FindLockOnCandidates()
+{
+	LockOnCandidates.Empty();
+
+	if (!LockOnDetectionSphere)
+	{
+		UE_LOG(LogTemp, Error, TEXT("LockOnDetectionSphere is null!"));
+		return;
+	}
+
+	// ��ȡ���巶Χ�ڵ������ص�Actor
+	TArray<AActor*> OverlappingActors;
+	LockOnDetectionSphere->GetOverlappingActors(OverlappingActors, APawn::StaticClass());
+
+	// ��ʱ�洢��ЧĿ��
+	TArray<AActor*> ValidTargets;
+	
+	for (AActor* Actor : OverlappingActors)
+	{
+		if (IsValidLockOnTarget(Actor))
+		{
+			ValidTargets.Add(Actor);
+		}
+	}
+
+	// ���Ƕ�������ЧĿ�� - ������
+	if (ValidTargets.Num() > 1)
+	{
+		SortCandidatesByDirection(ValidTargets);
+	}
+
+	// ��������Ŀ�����ӵ���ѡ�б�
+	LockOnCandidates = ValidTargets;
+
+	UE_LOG(LogTemp, Verbose, TEXT("Lock-on candidates updated: %d targets available"), LockOnCandidates.Num());
+}
+
+bool AMyCharacter::IsValidLockOnTarget(AActor* Target)
+{
+	if (!Target || Target == this)
+	{
+		return false;
+	}
+
+	// ���ӵ���ʶ����
+	if (Target->ActorHasTag(FName("Friendly")) || Target->ActorHasTag(FName("Player")))
+	{
+		return false;
+	}
+
+	// ���Ŀ���Ƿ�Ϊ���ˣ���ѡ���������ֻ�����ض����ˣ�
+	// if (!Target->ActorHasTag(FName("Enemy")))
+	// {
+	//     return false;
+	// }
+
+	// ���Ŀ���Ƿ񻹻��ţ����Ŀ��������ֵ�����	
+	if (APawn* TargetPawn = Cast<APawn>(Target))
+	{
+		// ���Pawn�Ƿ����ٻ���Ч
+		if (!IsValid(TargetPawn) || TargetPawn->IsPendingKill())
+		{
+			return false;
+		}
+
+		// ���������ֵ���������Ƿ�����
+		// UHealthComponent* HealthComp = TargetPawn->FindComponentByClass<UHealthComponent>();
+		// if (HealthComp && HealthComp->IsDead())
+		// {
+		//     return false;
+		// }
+	}
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+
+	// ������
+	float Distance = FVector::Dist(PlayerLocation, TargetLocation);
+	if (Distance > LockOnRange)
+	{
+		return false;
+	}
+
+	// ��������ڵ�
+	FHitResult HitResult;
+	FVector StartLocation = PlayerLocation + FVector(0, 0, RAYCAST_HEIGHT_OFFSET);
+	FVector EndLocation = TargetLocation + FVector(0, 0, RAYCAST_HEIGHT_OFFSET);
+	
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(this);
+	QueryParams.bTraceComplex = false;
+	
+	bool bHit = GetWorld()->LineTraceSingleByChannel(
+		HitResult,
+		StartLocation,
+		EndLocation,
+		ECC_Visibility,
+		QueryParams
+	);
+
+	// ������ڵ��һ��еĲ���Ŀ�걾��������Ч
+	if (bHit && HitResult.GetActor() != Target)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool AMyCharacter::IsTargetInSectorLockZone(AActor* Target) const
+{
+	if (!Target || !Controller)
+		return false;
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+	FVector CameraForward = Controller->GetControlRotation().Vector();
+	FVector ToTarget = (TargetLocation - PlayerLocation).GetSafeNormal();
+
+	// ����Ƕ�
+	float DotProduct = FVector::DotProduct(CameraForward, ToTarget);
+	DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
+	
+	float AngleRadians = FMath::Acos(DotProduct);
+	float AngleDegrees = FMath::RadiansToDegrees(AngleRadians);
+
+	// ����Ƿ�����������������
+	bool bInSectorZone = AngleDegrees <= (SECTOR_LOCK_ANGLE * 0.5f);
+
+	return bInSectorZone;
+}
+
+bool AMyCharacter::IsTargetInEdgeDetectionZone(AActor* Target) const
+{
+	if (!Target || !Controller)
+		return false;
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+	FVector CameraForward = Controller->GetControlRotation().Vector();
+	FVector ToTarget = (TargetLocation - PlayerLocation).GetSafeNormal();
+
+	// ����Ƕ�
+	float DotProduct = FVector::DotProduct(CameraForward, ToTarget);
+	DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
+	
+	float AngleRadians = FMath::Acos(DotProduct);
+	float AngleDegrees = FMath::RadiansToDegrees(AngleRadians);
+
+	// ����Ƿ��ڱ�Ե���������
+	bool bInEdgeZone = (AngleDegrees > (SECTOR_LOCK_ANGLE * 0.5f)) && 
+					   (AngleDegrees <= (EDGE_DETECTION_ANGLE * 0.5f));
+
+	return bInEdgeZone;
+}
+
+AActor* AMyCharacter::GetBestTargetFromList(const TArray<AActor*>& TargetList)
+{
+	if (TargetList.Num() == 0)
+		return nullptr;
+
+	AActor* BestTarget = nullptr;
+	float BestScore = -1.0f;
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector CameraForward = Controller ? Controller->GetControlRotation().Vector() : GetActorForwardVector();
+
+	for (AActor* Candidate : TargetList)
+	{
+		if (!IsValid(Candidate))
+			continue;
+			
+		FVector ToTarget = (Candidate->GetActorLocation() - PlayerLocation).GetSafeNormal();
+		float Distance = FVector::Dist(PlayerLocation, Candidate->GetActorLocation());
+		
+		// ��ֹ�������
+		if (LockOnRange <= 0.0f)
+		{
+			UE_LOG(LogTemp, Error, TEXT("LockOnRange is zero or negative!"));
+			continue;
+		}
+		
+		// ʹ�����ǰ������������
+		float DotProduct = FVector::DotProduct(CameraForward, ToTarget);
+
+		// �����㷨���Ƕ�����ռ70%����������ռ30%
+		float NormalizedDistance = FMath::Sqrt(Distance / LockOnRange);
+		float AngleFactor = DotProduct;
+		float DistanceFactor = 1.0f - NormalizedDistance;
+		
+		float Score = (AngleFactor * 0.7f) + (DistanceFactor * 0.3f);
+
+		// �ų���������ͬλ�õ�Ŀ��
+		if (Distance < 50.0f)
+		{
+			Score -= 0.5f; // �������֣����������������ص���Ŀ��
+		}
+
+		if (Score > BestScore)
+		{
+			BestScore = Score;
+			BestTarget = Candidate;
+		}
+	}
+
+	return BestTarget;
+}
+
+AActor* AMyCharacter::GetBestLockOnTarget()
+{
+	return GetBestSectorLockTarget();
+}
+
+AActor* AMyCharacter::GetBestSectorLockTarget()
+{
+	FindLockOnCandidates();
+
+	if (LockOnCandidates.Num() == 0)
+		return nullptr;
+
+	// ���ȳ���������������������Ŀ��
+	TArray<AActor*> SectorTargets;
+	TArray<AActor*> EdgeTargets;
+
+	for (AActor* Candidate : LockOnCandidates)
+	{
+		if (!Candidate)
+			continue;
+			
+		if (IsTargetInSectorLockZone(Candidate))
+		{
+			SectorTargets.Add(Candidate);
+		}
+		else if (IsTargetInEdgeDetectionZone(Candidate))
+		{
+			EdgeTargets.Add(Candidate);
+		}
+	}
+
+	// ���ȴ�����������ѡ��Ŀ��
+	if (SectorTargets.Num() > 0)
+	{
+		return GetBestTargetFromList(SectorTargets);
+	}
+
+	// �������������û��Ŀ�꣬����Ե����
+	if (EdgeTargets.Num() > 0)
+	{
+		return GetBestTargetFromList(EdgeTargets);
+	}
+
+	return nullptr;
+}
+
+void AMyCharacter::UpdateLockOnTarget()
+{
+	if (!CurrentLockOnTarget)
+	{
+		bIsLockedOn = false;
+		// ǿ������UI
+		HideAllLockOnWidgets();
+		if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+		{
+			LockOnWidgetInstance->RemoveFromViewport();
+			LockOnWidgetInstance = nullptr;
+		}
+		return;
+	}
+
+	// ��鵱ǰ����Ŀ���Ƿ���Ȼ��Ч
+	if (!IsTargetStillLockable(CurrentLockOnTarget))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Current lock-on target is no longer lockable - cancelling lock-on"));
+		
+		// ǿ����������UI��ʹ�ø�ǿ��������
+		HideAllLockOnWidgets();
+		if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+		{
+			LockOnWidgetInstance->RemoveFromViewport();
+			LockOnWidgetInstance = nullptr;
+		}
+		
+		// Ȼ��ȡ������״̬
+		bIsLockedOn = false;
+		PreviousLockOnTarget = CurrentLockOnTarget;
+		CurrentLockOnTarget = nullptr;
+		bShouldCameraFollowTarget = true;
+		bShouldCharacterRotateToTarget = true;
+		
+		// ֹͣ�κ����ڽ��е�ƽ���л����������
+		bIsSmoothSwitching = false;
+		bShouldSmoothSwitchCamera = false;
+		bShouldSmoothSwitchCharacter = false;
+		bIsCameraAutoCorrection = false;
+		DelayedCorrectionTarget = nullptr;
+		
+		// �ָ������ƶ�����
+		GetCharacterMovement()->bOrientRotationToMovement = true;
+		GetCharacterMovement()->MaxWalkSpeed = NormalWalkSpeed;
+	}
+}
+
+bool AMyCharacter::IsTargetStillLockable(AActor* Target)
+{
+	if (!Target || Target == this)
+		return false;
+
+	if (!IsValid(Target))
+		return false;
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+
+	// ʹ�ø���ľ��뷶Χ����������
+	float Distance = FVector::Dist(PlayerLocation, TargetLocation);
+	float ExtendedLockOnRange = LockOnRange * EXTENDED_LOCK_RANGE_MULTIPLIER;
+	
+	if (Distance > ExtendedLockOnRange)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+void AMyCharacter::UpdateLockOnCamera()
+{
+	if (!CurrentLockOnTarget || !Controller)
+		return;
+
+	// ֻ����Ӧ�ø���Ŀ��ʱ�Ÿ������
+	if (!bShouldCameraFollowTarget)
+	{
+		if (bShouldCharacterRotateToTarget)
+		{
+			UpdateCharacterRotationToTarget();
+		}
+		return;
+	}
+
+	// ==================== ����ͼһ�µ���������߼� ====================
+	// 1. ��ȡ��ҿ����������У�
+	APlayerController* PlayerController = Cast<APlayerController>(Controller);
+	if (!PlayerController)
+		return;
+
+	// 2. ��ȡ���λ��
+	FVector PlayerLocation = GetActorLocation();
+	
+	// 3. ��ȡĿ���Socket��λ�ã�����ʹ��Socket��
+	FVector TargetLocation;
+	if (bUseSocketProjection && HasValidSocket(CurrentLockOnTarget))
+	{
+		// ʹ��Socketλ��
+		TargetLocation = GetTargetSocketWorldLocation(CurrentLockOnTarget);
+		if (bEnableCameraDebugLogs)
+		{
+			UE_LOG(LogTemp, Log, TEXT("LockOn Camera: Using socket '%s' at location (%.1f, %.1f, %.1f)"), 
+				*TargetSocketName.ToString(), TargetLocation.X, TargetLocation.Y, TargetLocation.Z);
+		}
+	}
+	else
+	{
+		// ʹ��Actorλ����Ϊ��ѡ
+		TargetLocation = CurrentLockOnTarget->GetActorLocation();
+	}
+
+	// Ӧ��Ŀ��λ��ƫ�ƣ���Ӧ��ͼ�е�Vector����������λ�� - (0, 0, -350)��
+	TargetLocation += TargetLocationOffset;
+
+	// 4. ������ҳ���Ŀ�����ת���ȼ�����ͼ��� FindLookAtRotation��
+	FRotator LookAtRotation = UKismetMathLibrary::FindLookAtRotation(PlayerLocation, TargetLocation);
+
+	// 5. ��ȡ��ǰ���/����������ת
+	FRotator CurrentRotation = Controller->GetControlRotation();
+
+	// 6. ʹ�� FMath::RInterpTo ����ƽ����ֵ������ͼһ�µĲ�ֵ�߼���
+	float DeltaTime = GetWorld()->GetDeltaSeconds();
+	FRotator NewRotation;
+	
+	if (bEnableSmoothCameraTracking)
+	{
+		// �����������ģʽ���в�ͬ���͵Ĳ�ֵ
+		switch (CameraTrackingMode)
+		{
+		case 0: // ��ȫ���٣�Pitch + Yaw��
+			NewRotation = FMath::RInterpTo(CurrentRotation, LookAtRotation, DeltaTime, CameraInterpSpeed);
+			break;
+		case 1: // ��ˮƽ���٣�ֻ��Yaw��
+			{
+				FRotator HorizontalLookAt = FRotator(CurrentRotation.Pitch, LookAtRotation.Yaw, CurrentRotation.Roll);
+				NewRotation = FMath::RInterpTo(CurrentRotation, HorizontalLookAt, DeltaTime, CameraInterpSpeed);
+			}
+			break;
+		case 2: // �Զ���ģʽ������չ��
+		default:
+			NewRotation = FMath::RInterpTo(CurrentRotation, LookAtRotation, DeltaTime, CameraInterpSpeed);
+			break;
+		}
+	}
+	else
+	{
+		// ֱ��������ת�������в�ֵ
+		NewRotation = LookAtRotation;
+	}
+	
+	// 7. ���� Controller->SetControlRotation Ӧ�������ת
+	Controller->SetControlRotation(NewRotation);
+
+	// ������Ϣ���ɿ��ƿ��أ�
+	if (bEnableCameraDebugLogs)
+	{
+		float AngleDiff = FMath::Abs(FRotator::NormalizeAxis(NewRotation.Yaw - LookAtRotation.Yaw));
+		UE_LOG(LogTemp, VeryVerbose, TEXT("LockOn Camera: Target=%s, InterpSpeed=%.1f, AngleDiff=%.1f degrees"), 
+			*CurrentLockOnTarget->GetName(), CameraInterpSpeed, AngleDiff);
+	}
+
+	// �������þ����Ƿ��ý�ɫҲ����Ŀ��
+	if (bShouldCharacterRotateToTarget)
+	{
+		FRotator CharacterRotation = FMath::RInterpTo(GetActorRotation(), FRotator(0, LookAtRotation.Yaw, 0), 
+			DeltaTime, CHARACTER_ROTATION_SPEED);
+		SetActorRotation(CharacterRotation);
+	}
+}
+
+void AMyCharacter::UpdateCharacterRotationToTarget()
+{
+	if (!CurrentLockOnTarget)
+		return;
+
+	// ���㳯��Ŀ�����ת����Y����ת��
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = CurrentLockOnTarget->GetActorLocation();
+	
+	// Ӧ��Ŀ��λ��ƫ�ƣ�������߼�����һ�£�
+	TargetLocation += TargetLocationOffset;
+	
+	FRotator LookAtRotation = UKismetMathLibrary::FindLookAtRotation(PlayerLocation, TargetLocation);
+	
+	// ֻ���½�ɫ��Y����ת������ˮƽ����
+	FRotator CharacterRotation = FRotator(0, LookAtRotation.Yaw, 0);
+	FRotator NewRotation = FMath::RInterpTo(GetActorRotation(), CharacterRotation, 
+		GetWorld()->GetDeltaSeconds(), CHARACTER_ROTATION_SPEED);
+	
+	SetActorRotation(NewRotation);
+}
+
+float AMyCharacter::CalculateAngleToTarget(AActor* Target) const
+{
+	if (!IsValid(Target) || !Controller)
+		return 180.0f;
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+	FVector CurrentCameraForward = Controller->GetControlRotation().Vector();
+	FVector ToTarget = (TargetLocation - PlayerLocation).GetSafeNormal();
+
+	// ����ǶȲ���
+	float DotProduct = FVector::DotProduct(CurrentCameraForward, ToTarget);
+	DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
+	
+	float AngleRadians = FMath::Acos(DotProduct);
+	float AngleDegrees = FMath::RadiansToDegrees(AngleRadians);
+
+	return AngleDegrees;
+}
+
+float AMyCharacter::CalculateDirectionAngle(AActor* Target) const
+{
+	if (!IsValid(Target) || !Controller)
+		return 0.0f;
+
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+	FRotator ControlRotation = Controller->GetControlRotation();
+	FVector CurrentCameraForward = ControlRotation.Vector();
+	FVector CurrentCameraRight = ControlRotation.RotateVector(FVector::RightVector);
+
+	// ���㵽Ŀ�������
+	FVector ToTarget = (TargetLocation - PlayerLocation).GetSafeNormal();
+
+	// ������������ǰ����ĽǶ�
+	float ForwardDot = FVector::DotProduct(CurrentCameraForward, ToTarget);
+	float RightDot = FVector::DotProduct(CurrentCameraRight, ToTarget);
+
+	// ʹ��atan2����Ƕȣ���Χ��-180��180
+	float AngleRadians = FMath::Atan2(RightDot, ForwardDot);
+	float AngleDegrees = FMath::RadiansToDegrees(AngleRadians);
+
+	return AngleDegrees;
+}
+
+void AMyCharacter::SortCandidatesByDirection(TArray<AActor*>& Targets)
+{
+	if (Targets.Num() <= 1)
+		return;
+
+	// �Ƴ���Чָ��
+	Targets.RemoveAll([](AActor* Actor) { return !IsValid(Actor); });
+
+	if (Targets.Num() <= 1)
+		return;
+
+	// ʹ��Lambda����ʽ�������򣬴����ң��Ƕȴ�С����
+	Targets.Sort([this](const AActor& A, const AActor& B) {
+		if (!IsValid(&A) || !IsValid(&B)) 
+			return false;
+		
+		float AngleA = CalculateDirectionAngle(const_cast<AActor*>(&A));
+		float AngleB = CalculateDirectionAngle(const_cast<AActor*>(&B));
+		return AngleA < AngleB;
+	});
+}
+
+void AMyCharacter::StartSmoothTargetSwitch(AActor* NewTarget)
+{
+	if (!NewTarget || !Controller)
+		return;
+
+	// ����ǶȲ���
+	float AngleDifference = CalculateAngleToTarget(NewTarget);
+
+	if (AngleDifference <= TARGET_SWITCH_ANGLE_THRESHOLD)
+	{
+		// �ǶȲ���С����ֵ��ֻ����UI�����ƶ�����ͽ�ɫ
+		bShouldCameraFollowTarget = false;
+		bShouldCharacterRotateToTarget = false;
+		bIsSmoothSwitching = false;
+	}
+	else
+	{
+		// �ǶȲ��쳬����ֵ������ƽ���л�
+		bIsSmoothSwitching = true;
+		bShouldSmoothSwitchCamera = true;
+		bShouldSmoothSwitchCharacter = true;
+		
+		// ��¼�л���ʼ״̬
+		SmoothSwitchStartTime = GetWorld()->GetTimeSeconds();
+		SmoothSwitchStartRotation = Controller->GetControlRotation();
+		
+		// ����Ŀ����ת
+		FVector PlayerLocation = GetActorLocation();
+		FVector TargetLocation = NewTarget->GetActorLocation();
+		SmoothSwitchTargetRotation = UKismetMathLibrary::FindLookAtRotation(PlayerLocation, TargetLocation);
+		
+		// ��ʱ�����������
+		bShouldCameraFollowTarget = false;
+		bShouldCharacterRotateToTarget = false;
+	}
+}
+
+void AMyCharacter::UpdateSmoothTargetSwitch()
+{
+	if (!bIsSmoothSwitching || !Controller || !CurrentLockOnTarget)
+		return;
+
+	float DeltaTime = GetWorld()->GetDeltaSeconds();
+
+	// ���¼���Ŀ����ת����ΪĿ��������ƶ���	
+	FRotator CurrentTargetRotation = UKismetMathLibrary::FindLookAtRotation(GetActorLocation(), CurrentLockOnTarget->GetActorLocation());
+
+	// ƽ����ֵ��Ŀ����ת
+	if (bShouldSmoothSwitchCamera)
+	{
+		FRotator CurrentRotation = Controller->GetControlRotation();
+		FRotator NewRotation = FMath::RInterpTo(CurrentRotation, CurrentTargetRotation, 
+			DeltaTime, TARGET_SWITCH_SMOOTH_SPEED);
+		Controller->SetControlRotation(NewRotation);
+
+		// ����Ƿ�ӽ�Ŀ����ת
+		float AngleDifference = FMath::Abs(FRotator::NormalizeAxis(NewRotation.Yaw - CurrentTargetRotation.Yaw));
+		if (AngleDifference < LOCK_COMPLETION_THRESHOLD)
+		{
+			bShouldSmoothSwitchCamera = false;
+		}
+	}
+
+	// ƽ����ת��ɫ
+	if (bShouldSmoothSwitchCharacter)
+	{
+		FRotator CharacterTargetRotation = FRotator(0, CurrentTargetRotation.Yaw, 0);
+		FRotator CurrentCharacterRotation = GetActorRotation();
+		FRotator NewCharacterRotation = FMath::RInterpTo(CurrentCharacterRotation, CharacterTargetRotation, 
+			DeltaTime, TARGET_SWITCH_SMOOTH_SPEED);
+		SetActorRotation(NewCharacterRotation);
+
+		// ����Ƿ�ӽ�Ŀ����ת
+		float AngleDifference = FMath::Abs(FRotator::NormalizeAxis(NewCharacterRotation.Yaw - CharacterTargetRotation.Yaw));
+		if (AngleDifference < LOCK_COMPLETION_THRESHOLD)
+		{
+			bShouldSmoothSwitchCharacter = false;
+		}
+	}
+
+	// ����Ƿ��������ƽ���л�
+	if (!bShouldSmoothSwitchCamera && !bShouldSmoothSwitchCharacter)
+	{
+		// ƽ���л���ɣ��ָ��������������״̬
+		bIsSmoothSwitching = false;
+		bShouldCameraFollowTarget = true;
+		bShouldCharacterRotateToTarget = true;
+	}
+}
+
+// ==================== ���봦������ ====================
+void AMyCharacter::HandleRightStickX(float Value)
+{
+	// ֻ������״̬�´�����ҡ���л�Ŀ��
+	if (!bIsLockedOn)
+		return;
+
+	// ���ҡ�˴�����λ���ƶ�������
+	bool bCurrentLeftPressed = (Value < -THUMBSTICK_THRESHOLD);
+	bool bCurrentRightPressed = (Value > THUMBSTICK_THRESHOLD);
+
+	// ��ⰴ���¼�����δ���µ����£�
+	if (bCurrentLeftPressed && !bRightStickLeftPressed)
+	{
+		SwitchLockOnTargetLeft();
+	}
+	else if (bCurrentRightPressed && !bRightStickRightPressed)
+	{
+		SwitchLockOnTargetRight();
+	}
+
+	// ����״̬
+	bRightStickLeftPressed = bCurrentLeftPressed;
+	bRightStickRightPressed = bCurrentRightPressed;
+	LastRightStickX = Value;
+}
+
+void AMyCharacter::HandleLockOnButton()
+{
+	ToggleLockOn();
+}
+
+void AMyCharacter::SwitchLockOnTargetLeft()
+{
+	if (!bIsLockedOn || LockOnCandidates.Num() <= 1)
+		return;
+
+	// �л�ǰ��ǿ����������UI��ȷ��û������
+	HideAllLockOnWidgets();
+
+	// ֻ�ڱ�Ҫʱˢ�º�ѡĿ���б�
+	if (LockOnCandidates.Num() == 0)
+	{
+		FindLockOnCandidates();
+	}
+
+	int32 CurrentIndex = LockOnCandidates.Find(CurrentLockOnTarget);
+	if (CurrentIndex != INDEX_NONE && CurrentIndex > 0)
+	{
+		int32 NewIndex = CurrentIndex - 1;
+		AActor* NewTarget = LockOnCandidates[NewIndex];
+		
+		if (IsValidLockOnTarget(NewTarget))
+		{
+			PreviousLockOnTarget = CurrentLockOnTarget;
+			CurrentLockOnTarget = NewTarget;
+			StartSmoothTargetSwitch(NewTarget);
+			ShowLockOnWidget();
+		}
+	}
+}
+
+void AMyCharacter::SwitchLockOnTargetRight()
+{
+	if (!bIsLockedOn || LockOnCandidates.Num() <= 1)
+		return;
+
+	// �л�ǰ��ǿ����������UI��ȷ��û������
+	HideAllLockOnWidgets();
+
+	// ֻ�ڱ�Ҫʱˢ�º�ѡĿ���б�
+	if (LockOnCandidates.Num() == 0)
+	{
+		FindLockOnCandidates();
+	}
+
+	int32 CurrentIndex = LockOnCandidates.Find(CurrentLockOnTarget);
+	if (CurrentIndex != INDEX_NONE && CurrentIndex < LockOnCandidates.Num() - 1)
+	{
+		int32 NewIndex = CurrentIndex + 1;
+		AActor* NewTarget = LockOnCandidates[NewIndex];
+		
+		if (IsValidLockOnTarget(NewTarget))
+		{
+			PreviousLockOnTarget = CurrentLockOnTarget;
+			CurrentLockOnTarget = NewTarget;
+			StartSmoothTargetSwitch(NewTarget);
+			ShowLockOnWidget();
+		}
+	}
+}
+
+void AMyCharacter::DebugInputTest()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== DEBUG INPUT TEST ==="));
+	UE_LOG(LogTemp, Warning, TEXT("IsLockedOn: %s"), bIsLockedOn ? TEXT("True") : TEXT("False"));
+	UE_LOG(LogTemp, Warning, TEXT("Current Target: %s"), CurrentLockOnTarget ? *CurrentLockOnTarget->GetName() : TEXT("None"));
+	UE_LOG(LogTemp, Warning, TEXT("Available Targets: %d"), LockOnCandidates.Num());
+	UE_LOG(LogTemp, Warning, TEXT("========================"));
+}
+
+void AMyCharacter::DebugWidgetSetup()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== WIDGET SETUP DEBUG ==="));
+	UE_LOG(LogTemp, Warning, TEXT("LockOnWidgetClass is set: %s"), LockOnWidgetClass ? TEXT("YES") : TEXT("NO"));
+	
+	if (LockOnWidgetClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("LockOnWidgetClass name: %s"), *LockOnWidgetClass->GetName());
+		UE_LOG(LogTemp, Warning, TEXT("LockOnWidgetClass path: %s"), *LockOnWidgetClass->GetPathName());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("LockOnWidgetClass is NULL! Attempting to find available Widgets..."));
+		
+		// ���Բ��ҿ��õ�Widget��
+		TArray<FString> PossibleWidgetPaths = {
+			TEXT("/Game/Levels/Widget_LockOnIcon.Widget_LockOnIcon_C"),
+			TEXT("/Game/LockOnTS/Widgets/UI_LockOnWidget.UI_LockOnWidget_C"),
+			TEXT("Widget_LockOnIcon_C"),
+			TEXT("UI_LockOnWidget_C")
+		};
+		
+		UE_LOG(LogTemp, Warning, TEXT("Searching for Widget classes:"));
+		for (const FString& WidgetPath : PossibleWidgetPaths)
+		{
+			UClass* FoundWidgetClass = LoadObject<UClass>(nullptr, *WidgetPath);
+			if (!FoundWidgetClass)
+			{
+				FoundWidgetClass = FindObject<UClass>(ANY_PACKAGE, *WidgetPath);
+			}
+			
+			if (FoundWidgetClass && FoundWidgetClass->IsChildOf(UUserWidget::StaticClass()))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("? FOUND: %s"), *WidgetPath);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("? NOT FOUND: %s"), *WidgetPath);
+			}
+		}
+		
+		UE_LOG(LogTemp, Error, TEXT("Steps to fix:"));
+		UE_LOG(LogTemp, Error, TEXT("1. Open your character Blueprint"));
+		UE_LOG(LogTemp, Error, TEXT("2. Find 'Lock On Widget Class' in the UI category"));
+		UE_LOG(LogTemp, Error, TEXT("3. Set it to Widget_LockOnIcon or UI_LockOnWidget"));
+		UE_LOG(LogTemp, Error, TEXT("4. Ensure the Widget has 'UpdateLockOnPostition' Custom Event"));
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("Socket projection enabled: %s"), bUseSocketProjection ? TEXT("YES") : TEXT("NO"));
+	UE_LOG(LogTemp, Warning, TEXT("Target Socket Name: %s"), *TargetSocketName.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("Socket Offset: (%.1f, %.1f, %.1f)"), SocketOffset.X, SocketOffset.Y, SocketOffset.Z);
+	UE_LOG(LogTemp, Warning, TEXT("Current widget instance: %s"), LockOnWidgetInstance ? TEXT("EXISTS") : TEXT("NULL"));
+	
+	// ���PlayerController
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	UE_LOG(LogTemp, Warning, TEXT("PlayerController available: %s"), PC ? TEXT("YES") : TEXT("NO"));
+	
+	// ��鵱ǰ����Ŀ��
+	if (CurrentLockOnTarget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Current lock-on target: %s"), *CurrentLockOnTarget->GetName());
+		
+		// ���Ŀ���Ƿ���ָ����Socket
+		bool bHasSocket = HasValidSocket(CurrentLockOnTarget);
+		UE_LOG(LogTemp, Warning, TEXT("Target has Socket '%s': %s"), *TargetSocketName.ToString(), bHasSocket ? TEXT("YES") : TEXT("NO"));
+		
+		if (bHasSocket)
+		{
+			FVector SocketLocation = GetTargetSocketWorldLocation(CurrentLockOnTarget);
+			UE_LOG(LogTemp, Warning, TEXT("Socket world location: (%.1f, %.1f, %.1f)"), SocketLocation.X, SocketLocation.Y, SocketLocation.Z);
+			
+			FVector2D ScreenPos = ProjectSocketToScreen(SocketLocation);
+			UE_LOG(LogTemp, Warning, TEXT("Socket screen position: (%.1f, %.1f)"), ScreenPos.X, ScreenPos.Y);
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No current lock-on target"));
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("========================"));
+}
+
+// ==================== UI��غ��� ====================
+void AMyCharacter::ShowLockOnWidget()
+{
+	if (!CurrentLockOnTarget)
+		return;
+
+	// ������������Ŀ���UI
+	HideAllLockOnWidgets();
+
+	// �������SocketͶ�䣬ʹ���µ�SocketͶ��UIϵͳ
+	if (bUseSocketProjection)
+	{
+		ShowSocketProjectionWidget();
+		return;
+	}
+
+	// ��ͳ��3D�ռ�UI��ʾ�����ּ����ԣ�
+	UActorComponent* WidgetComp = CurrentLockOnTarget->GetComponentByClass(UWidgetComponent::StaticClass());
+	if (WidgetComp)
+	{
+		UWidgetComponent* WidgetComponent = Cast<UWidgetComponent>(WidgetComp);
+		if (WidgetComponent)
+		{
+			WidgetComponent->SetVisibility(true);
+			PreviousLockOnTarget = CurrentLockOnTarget;
+			return;
+		}
+	}
+
+	// ���÷�����ʹ����Ļ�ռ�UI
+	if (!LockOnWidgetClass)
+		return;
+
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+		return;
+
+	if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+	{
+		LockOnWidgetInstance->RemoveFromViewport();
+	}
+
+	LockOnWidgetInstance = CreateWidget<UUserWidget>(PC, LockOnWidgetClass);
+	if (LockOnWidgetInstance)
+	{
+		LockOnWidgetInstance->AddToViewport();
+		PreviousLockOnTarget = CurrentLockOnTarget;
+	}
+}
+
+void AMyCharacter::HideLockOnWidget()
+{
+	HideAllLockOnWidgets();
+
+	// ����SocketͶ��UI
+	if (bUseSocketProjection)
+	{
+		HideSocketProjectionWidget();
+	}
+
+	if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+	{
+		LockOnWidgetInstance->RemoveFromViewport();
+	}
+
+	LockOnWidgetInstance = nullptr;
+	PreviousLockOnTarget = nullptr;
+}
+
+void AMyCharacter::UpdateLockOnWidget()
+{
+	// �����������״̬��ȷ������UI������
+	if (!bIsLockedOn)
+	{
+		HideAllLockOnWidgets();
+		if (bUseSocketProjection)
+		{
+			HideSocketProjectionWidget();
+		}
+		if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+		{
+			LockOnWidgetInstance->RemoveFromViewport();
+			LockOnWidgetInstance = nullptr;
+		}
+		return;
+	}
+
+	// ���Ŀ���Ƿ����仯
+	bool bTargetChanged = (CurrentLockOnTarget != PreviousLockOnTarget);
+	
+	if (bTargetChanged && IsValid(PreviousLockOnTarget))
+	{
+		// ������һ��Ŀ���UI
+		if (bUseSocketProjection)
+		{
+			HideSocketProjectionWidget();
+		}
+		else
+		{
+			UActorComponent* PrevWidgetComp = PreviousLockOnTarget->GetComponentByClass(UWidgetComponent::StaticClass());
+			if (PrevWidgetComp)
+			{
+				UWidgetComponent* PrevWidgetComponent = Cast<UWidgetComponent>(PrevWidgetComp);
+				if (PrevWidgetComponent && PrevWidgetComponent->IsVisible())
+				{
+					PrevWidgetComponent->SetVisibility(false);
+				}
+			}
+		}
+		
+		PreviousLockOnTarget = CurrentLockOnTarget;
+	}
+
+	// �����ǰ������Ŀ���Ҵ�������״̬������UI
+	if (bIsLockedOn && IsValid(CurrentLockOnTarget))
+	{
+		if (bUseSocketProjection)
+		{
+			// ʹ��SocketͶ�����UIλ��
+			UpdateSocketProjectionWidget();
+		}
+		else
+		{
+			// ��ͳ3D�ռ�UI����
+			UActorComponent* WidgetComp = CurrentLockOnTarget->GetComponentByClass(UWidgetComponent::StaticClass());
+			if (WidgetComp)
+			{
+				UWidgetComponent* WidgetComponent = Cast<UWidgetComponent>(WidgetComp);
+				if (WidgetComponent && (!WidgetComponent->IsVisible() || bTargetChanged))
+				{
+					WidgetComponent->SetVisibility(true);
+				}
+			}
+		}
+	}
+}
+
+// ==================== SocketͶ��ϵͳʵ�� ====================
+FVector AMyCharacter::GetTargetSocketWorldLocation(AActor* Target) const
+{
+	if (!Target)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GetTargetSocketWorldLocation: Target is null"));
+		return FVector::ZeroVector;
+	}
+
+	// ���Ի�ȡĿ��Ĺ����������
+	USkeletalMeshComponent* SkeletalMesh = Target->FindComponentByClass<USkeletalMeshComponent>();
+	if (SkeletalMesh && SkeletalMesh->DoesSocketExist(TargetSocketName))
+	{
+		// ���Socket���ڣ�����Socket������λ�ü���ƫ��
+		FVector SocketLocation = SkeletalMesh->GetSocketLocation(TargetSocketName);
+		FVector FinalLocation = SocketLocation + SocketOffset;
+		
+		UE_LOG(LogTemp, Verbose, TEXT("Socket '%s' found on target '%s' at location (%.1f, %.1f, %.1f)"), 
+			*TargetSocketName.ToString(), *Target->GetName(), FinalLocation.X, FinalLocation.Y, FinalLocation.Z);
+		
+		return FinalLocation;
+	}
+	else
+	{
+		// ���û��Socket������Actor��λ�ü���ƫ��
+		FVector FallbackLocation = Target->GetActorLocation() + SocketOffset;
+		
+		UE_LOG(LogTemp, Verbose, TEXT("Socket '%s' not found on target '%s', using fallback location (%.1f, %.1f, %.1f)"), 
+			*TargetSocketName.ToString(), *Target->GetName(), FallbackLocation.X, FallbackLocation.Y, FallbackLocation.Z);
+		
+		return FallbackLocation;
+	}
+}
+
+bool AMyCharacter::HasValidSocket(AActor* Target) const
+{
+	if (!Target)
+	{
+		return false;
+	}
+
+	// ���Ŀ���Ƿ���ָ����Socket
+	USkeletalMeshComponent* SkeletalMesh = Target->FindComponentByClass<USkeletalMeshComponent>();
+	if (SkeletalMesh)
+	{
+		bool bSocketExists = SkeletalMesh->DoesSocketExist(TargetSocketName);
+		UE_LOG(LogTemp, Verbose, TEXT("Socket check for '%s': Socket '%s' exists = %s"), 
+			*Target->GetName(), *TargetSocketName.ToString(), bSocketExists ? TEXT("YES") : TEXT("NO"));
+		return bSocketExists;
+	}
+
+	UE_LOG(LogTemp, Verbose, TEXT("Target '%s' has no SkeletalMeshComponent"), *Target->GetName());
+	return false;
+}
+
+FVector2D AMyCharacter::ProjectSocketToScreen(const FVector& SocketWorldLocation) const
+{
+	// ��ȡ��ҿ�����
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ProjectSocketToScreen: No PlayerController"));
+		return FVector2D::ZeroVector;
+	}
+
+	// ������λ��Ͷ�䵽��Ļ����
+	FVector2D ScreenLocation;
+	bool bProjected = PC->ProjectWorldLocationToScreen(SocketWorldLocation, ScreenLocation);
+	
+	if (bProjected)
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("Projection successful: World(%.1f, %.1f, %.1f) -> Screen(%.1f, %.1f)"), 
+			SocketWorldLocation.X, SocketWorldLocation.Y, SocketWorldLocation.Z,
+			ScreenLocation.X, ScreenLocation.Y);
+		return ScreenLocation;
+	}
+	else
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("Projection failed for world location (%.1f, %.1f, %.1f)"), 
+			SocketWorldLocation.X, SocketWorldLocation.Y, SocketWorldLocation.Z);
+		return FVector2D::ZeroVector;
+	}
+}
+
+void AMyCharacter::ShowSocketProjectionWidget()
+{
+	if (!CurrentLockOnTarget)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ShowSocketProjectionWidget: No current lock-on target"));
+		return;
+	}
+
+	// ���LockOnWidgetClassû�����ã�����������ʱ����
+	if (!LockOnWidgetClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ShowSocketProjectionWidget: LockOnWidgetClass is not set! Attempting runtime search..."));
+		
+		// ���Զ��ֿ��ܵ�Widget�����ƺ�·��
+		TArray<FString> PossibleWidgetPaths = {
+			TEXT("/Game/Levels/Widget_LockOnIcon.Widget_LockOnIcon_C"),
+			TEXT("/Game/LockOnTS/Widgets/UI_LockOnWidget.UI_LockOnWidget_C"),
+			TEXT("Widget_LockOnIcon_C"),
+			TEXT("UI_LockOnWidget_C"),
+			TEXT("/Game/Levels/Widget_LockOnIcon"),
+			TEXT("/Game/LockOnTS/Widgets/UI_LockOnWidget")
+		};
+		
+		for (const FString& WidgetPath : PossibleWidgetPaths)
+		{
+			UClass* FoundWidgetClass = LoadObject<UClass>(nullptr, *WidgetPath);
+			
+			if (!FoundWidgetClass)
+			{
+				// ����ͨ�����Ʋ���
+				FoundWidgetClass = FindObject<UClass>(ANY_PACKAGE, *WidgetPath);
+			}
+			
+			if (FoundWidgetClass && FoundWidgetClass->IsChildOf(UUserWidget::StaticClass()))
+			{
+				LockOnWidgetClass = FoundWidgetClass;
+				UE_LOG(LogTemp, Warning, TEXT("Found Widget class at runtime: %s (Path: %s)"), 
+					*FoundWidgetClass->GetName(), *WidgetPath);
+				break;
+			}
+			else
+			{
+				UE_LOG(LogTemp, Verbose, TEXT("Widget not found at path: %s"), *WidgetPath);
+			}
+		}
+		
+		if (!LockOnWidgetClass)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Could not find any Widget class at runtime!"));
+			UE_LOG(LogTemp, Error, TEXT("Available Widget files found in project:"));
+			UE_LOG(LogTemp, Error, TEXT("- F:\\soul\\Content\\Levels\\Widget_LockOnIcon.uasset"));
+			UE_LOG(LogTemp, Error, TEXT("- F:\\soul\\Content\\LockOnTS\\Widgets\\UI_LockOnWidget.uasset"));
+			UE_LOG(LogTemp, Error, TEXT("Please ensure:"));
+			UE_LOG(LogTemp, Error, TEXT("1. One of these Widgets is compiled and valid"));
+			UE_LOG(LogTemp, Error, TEXT("2. LockOnWidgetClass is set in Blueprint to one of these Widgets"));
+			UE_LOG(LogTemp, Error, TEXT("3. Widget contains UpdateLockOnPostition event"));
+			UE_LOG(LogTemp, Error, TEXT("4. Call DebugWidgetSetup() function for more info"));
+			return;
+		}
+	}
+
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		UE_LOG(LogTemp, Error, TEXT("ShowSocketProjectionWidget: No valid PlayerController"));
+		return;
+	}
+
+	// �������ʵ�������ӿ��У����Ƴ�
+	if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Removing existing UMG widget instance"));
+		LockOnWidgetInstance->RemoveFromViewport();
+	}
+
+	// �����µ�Widgetʵ��
+	LockOnWidgetInstance = CreateWidget<UUserWidget>(PC, LockOnWidgetClass);
+	if (LockOnWidgetInstance)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Successfully created UMG widget instance: %s"), *LockOnWidgetInstance->GetClass()->GetName());
+		
+		LockOnWidgetInstance->AddToViewport();
+		UE_LOG(LogTemp, Warning, TEXT("UMG widget added to viewport"));
+		
+		// ��������λ��
+		UpdateSocketProjectionWidget();
+		
+		PreviousLockOnTarget = CurrentLockOnTarget;
+		
+		UE_LOG(LogTemp, Warning, TEXT("Socket projection widget created and shown for target: %s"), 
+			*CurrentLockOnTarget->GetName());
+		UE_LOG(LogTemp, Warning, TEXT("Using Socket: %s"), *TargetSocketName.ToString());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to create UMG widget instance! LockOnWidgetClass: %s"), 
+			LockOnWidgetClass ? *LockOnWidgetClass->GetName() : TEXT("NULL"));
+	}
+}
+
+void AMyCharacter::UpdateSocketProjectionWidget()
+{
+	if (!CurrentLockOnTarget || !LockOnWidgetInstance || !LockOnWidgetInstance->IsInViewport())
+		return;
+
+	// Get target Socket world location
+	FVector SocketWorldLocation = GetTargetSocketWorldLocation(CurrentLockOnTarget);
+	
+	// Project to screen coordinates
+	FVector2D ScreenPosition = ProjectSocketToScreen(SocketWorldLocation);
+	
+	// Check if projection is successful (screen coordinates are valid)
+	if (ScreenPosition != FVector2D::ZeroVector)
+	{
+		// Try to call your UMG event function UpdateLockOnPostition (keeping original spelling)
+		UFunction* UpdateFunction = LockOnWidgetInstance->GetClass()->FindFunctionByName(FName(TEXT("UpdateLockOnPostition")));
+		
+		if (UpdateFunction)
+		{
+			// Check function parameter count
+			if (UpdateFunction->NumParms >= 1)
+			{
+				// Create parameter structure
+				uint8* Params = static_cast<uint8*>(FMemory_Alloca(UpdateFunction->ParmsSize));
+				FMemory::Memzero(Params, UpdateFunction->ParmsSize);
+				
+				// Find FVector2D parameter
+				bool bFoundParam = false;
+				for (TFieldIterator<FProperty> It(UpdateFunction); It; ++It)
+				{
+					FProperty* Property = *It;
+					if (Property->HasAnyPropertyFlags(CPF_Parm) && !Property->HasAnyPropertyFlags(CPF_ReturnParm))
+					{
+						// Check if it's FVector2D type
+						if (FStructProperty* StructProp = CastField<FStructProperty>(Property))
+						{
+							if (StructProp->Struct && StructProp->Struct->GetFName() == FName("Vector2D"))
+							{
+								// Set parameter value
+								FVector2D* ParamPtr = reinterpret_cast<FVector2D*>(Params + Property->GetOffset_ForInternal());
+								*ParamPtr = ScreenPosition;
+								bFoundParam = true;
+								UE_LOG(LogTemp, Warning, TEXT("Setting UMG position parameter: (%.1f, %.1f) using function UpdateLockOnPostition"), 
+									ScreenPosition.X, ScreenPosition.Y);
+								break;
+							}
+						}
+					}
+				}
+				
+				if (bFoundParam)
+				{
+					// Call function
+					LockOnWidgetInstance->ProcessEvent(UpdateFunction, Params);
+					UE_LOG(LogTemp, Warning, TEXT("Successfully called UMG update function UpdateLockOnPostition with position: (%.1f, %.1f)"), 
+						ScreenPosition.X, ScreenPosition.Y);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Error, TEXT("Could not find Vector2D parameter in UMG function UpdateLockOnPostition"));
+				}
+			}
+			else
+			{
+				UE_LOG(LogTemp, Error, TEXT("UMG function UpdateLockOnPostition has no parameters"));
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("Could not find UMG update function UpdateLockOnPostition in widget class"));
+		}
+		
+		// Ensure Widget is visible
+		if (!LockOnWidgetInstance->IsVisible())
+		{
+			LockOnWidgetInstance->SetVisibility(ESlateVisibility::Visible);
+			UE_LOG(LogTemp, Warning, TEXT("Set UMG widget visibility to Visible"));
+		}
+		
+		// Debug log - including Socket information
+		UE_LOG(LogTemp, Warning, TEXT("Socket projection updated: Socket(%s) World(%.1f, %.1f, %.1f) -> Screen(%.1f, %.1f)"), 
+			*TargetSocketName.ToString(),
+			SocketWorldLocation.X, SocketWorldLocation.Y, SocketWorldLocation.Z,
+			ScreenPosition.X, ScreenPosition.Y);
+	}
+	else
+	{
+		// Target is off-screen, hide Widget
+		if (LockOnWidgetInstance->IsVisible())
+		{
+			LockOnWidgetInstance->SetVisibility(ESlateVisibility::Hidden);
+			UE_LOG(LogTemp, Warning, TEXT("Target off-screen, hiding UMG widget"));
+		}
+	}
+}
+
+void AMyCharacter::HideSocketProjectionWidget()
+{
+	if (LockOnWidgetInstance && LockOnWidgetInstance->IsInViewport())
+	{
+		LockOnWidgetInstance->RemoveFromViewport();
+		UE_LOG(LogTemp, Warning, TEXT("Socket projection widget hidden"));
+	}
+	
+	LockOnWidgetInstance = nullptr;
+}
+
+// ==================== ȱʧ�ĺ���ʵ�� ====================
+void AMyCharacter::HideAllLockOnWidgets()
+{
+	// �������к�ѡĿ�꣬�������ǵ�UI
+	for (AActor* Candidate : LockOnCandidates)
+	{
+		if (IsValid(Candidate))
+		{
+			UActorComponent* WidgetComp = Candidate->GetComponentByClass(UWidgetComponent::StaticClass());
+			if (WidgetComp)
+			{
+				UWidgetComponent* WidgetComponent = Cast<UWidgetComponent>(WidgetComp);
+				if (WidgetComponent && WidgetComponent->IsVisible())
+				{
+					WidgetComponent->SetVisibility(false);
+				}
+			}
+		}
+	}
+	
+	// ���ⰲȫ��ʩ������е�ǰ����Ŀ�꣬Ҳȷ������UI������
+	if (IsValid(CurrentLockOnTarget))
+	{
+		UActorComponent* WidgetComp = CurrentLockOnTarget->GetComponentByClass(UWidgetComponent::StaticClass());
+		if (WidgetComp)
+		{
+			UWidgetComponent* WidgetComponent = Cast<UWidgetComponent>(WidgetComp);
+			if (WidgetComponent && WidgetComponent->IsVisible())
+			{
+				WidgetComponent->SetVisibility(false);
+			}
+		}
+	}
+	
+	// ���ⰲȫ��ʩ�������֮ǰ������Ŀ�꣬Ҳȷ������UI������
+	if (IsValid(PreviousLockOnTarget))
+	{
+		UActorComponent* WidgetComp = PreviousLockOnTarget->GetComponentByClass(UWidgetComponent::StaticClass());
+		if (WidgetComp)
+		{
+			UWidgetComponent* WidgetComponent = Cast<UWidgetComponent>(WidgetComp);
+			if (WidgetComponent && WidgetComponent->IsVisible())
+			{
+				WidgetComponent->SetVisibility(false);
+			}
+		}
+	}
+}
+
+bool AMyCharacter::HasCandidatesInSphere()
+{
+	FindLockOnCandidates();
+	return LockOnCandidates.Num() > 0;
+}
+
+AActor* AMyCharacter::TryGetSectorLockTarget()
+{
+	if (LockOnCandidates.Num() == 0)
+		return nullptr;
+
+	// ɸѡ���������ڵ�Ŀ��
+	TArray<AActor*> SectorTargets;
+	
+	for (AActor* Candidate : LockOnCandidates)
+	{
+		if (Candidate && IsTargetInSectorLockZone(Candidate))
+		{
+			SectorTargets.Add(Candidate);
+		}
+	}
+
+	// ���������������Ŀ�꣬�������Ŀ��
+	if (SectorTargets.Num() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Found %d targets in sector lock zone"), SectorTargets.Num());
+		return GetBestTargetFromList(SectorTargets);
+	}
+
+	return nullptr;
+}
+
+AActor* AMyCharacter::TryGetCameraCorrectionTarget()
+{
+	if (LockOnCandidates.Num() == 0)
+		return nullptr;
+
+	// Ѱ�������Ŀ�꣨�����ƽǶȣ�
+	AActor* ClosestTarget = nullptr;
+	float ClosestDistance = FLT_MAX;
+	
+	FVector PlayerLocation = GetActorLocation();
+	
+	for (AActor* Candidate : LockOnCandidates)
+	{
+		if (!Candidate)
+			continue;
+			
+		float Distance = FVector::Dist(PlayerLocation, Candidate->GetActorLocation());
+		
+		if (Distance < ClosestDistance)
+		{
+			ClosestDistance = Distance;
+			ClosestTarget = Candidate;
+		}
+	}
+
+	// ��������Ŀ���Ƿ��ں�����������Χ��
+	if (ClosestTarget)
+	{
+		float AngleToTarget = CalculateAngleToTarget(ClosestTarget);
+		
+		// ֻ�ԽǶ��ں�����Χ�ڵ�Ŀ����������������������������ĵ��ˣ�
+		if (AngleToTarget <= 160.0f) // ���160�ȣ�������160�ȷ�Χ��
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Found camera correction target: %s (Distance: %.1f, Angle: %.1f degrees)"), 
+				*ClosestTarget->GetName(), ClosestDistance, AngleToTarget);
+			return ClosestTarget;
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Closest target %s is too far behind (%.1f degrees), no correction"), 
+				*ClosestTarget->GetName(), AngleToTarget);
+		}
+	}
+
+	return nullptr;
+}
+
+void AMyCharacter::StartCameraCorrectionForTarget(AActor* Target)
+{
+	if (!Target || !Controller)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StartCameraCorrectionForTarget: Invalid target or controller"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("Starting camera correction for target: %s"), *Target->GetName());
+
+	// ���㳯��Ŀ�����ת
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = Target->GetActorLocation();
+	FRotator TargetRotation = UKismetMathLibrary::FindLookAtRotation(PlayerLocation, TargetLocation);
+	
+	// ��������Զ�����
+	bIsCameraAutoCorrection = true;
+	CameraCorrectionStartTime = GetWorld()->GetTimeSeconds();
+	CameraCorrectionStartRotation = Controller->GetControlRotation();
+	
+	// �����������Ŀ����ת
+	FRotator CurrentRotation = Controller->GetControlRotation();
+	float YawDifference = FRotator::NormalizeAxis(TargetRotation.Yaw - CurrentRotation.Yaw);
+	
+	// ������������ͷ���
+	float CorrectionAmount;
+	if (FMath::Abs(YawDifference) <= CAMERA_CORRECTION_OFFSET)
+	{
+		// ����ǶȲ���С������ƫ������ֱ�Ӷ�׼Ŀ��
+		CorrectionAmount = YawDifference;
+	}
+	else
+	{
+		// ����ǶȲ���ϴ�ֻ����һ���֣���Ŀ��������������Ե��	
+		CorrectionAmount = FMath::Sign(YawDifference) * CAMERA_CORRECTION_OFFSET;
+	}
+	
+	CameraCorrectionTargetRotation = FRotator(
+		CurrentRotation.Pitch,
+		CurrentRotation.Yaw + CorrectionAmount,
+		CurrentRotation.Roll
+	);
+
+	UE_LOG(LogTemp, Warning, TEXT("Camera correction: Current=%.1f degrees, Target=%.1f degrees, Correction=%.1f degrees"), 
+		CurrentRotation.Yaw, TargetRotation.Yaw, CorrectionAmount);
+}
+
+void AMyCharacter::StartCameraAutoCorrection(AActor* Target)
+{
+	// �����������Ϊ�˼����ԣ�ʵ��ʹ�� StartCameraCorrectionForTarget
+	StartCameraCorrectionForTarget(Target);
+}
+
+void AMyCharacter::UpdateCameraAutoCorrection()
+{
+	if (!bIsCameraAutoCorrection || !Controller)
+		return;
+
+	// �������Ƿ������� - �ṩ����İ�ȫ���
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	if (PC)
+	{
+		// �����ҵ��������
+		float PlayerYawInput = PC->GetInputAxisValue("Turn");
+		float PlayerPitchInput = PC->GetInputAxisValue("LookUp");
+		
+		if (FMath::Abs(PlayerYawInput) > 0.05f || FMath::Abs(PlayerPitchInput) > 0.05f)
+		{
+			// ��������룬����ֹͣ�Զ�����
+			bIsCameraAutoCorrection = false;
+			DelayedCorrectionTarget = nullptr;
+			UE_LOG(LogTemp, Warning, TEXT("Player input detected during auto correction - stopping immediately"));
+			return;
+		}
+	}
+
+	float CurrentTime = GetWorld()->GetTimeSeconds();
+	float CorrectionDuration = CurrentTime - CameraCorrectionStartTime;
+	float DeltaTime = GetWorld()->GetDeltaSeconds();
+
+	// ƽ����ֵ������Ŀ����ת
+	FRotator CurrentRotation = Controller->GetControlRotation();
+	FRotator NewRotation = FMath::RInterpTo(CurrentRotation, CameraCorrectionTargetRotation, 
+		DeltaTime, CAMERA_AUTO_CORRECTION_SPEED);
+	
+	Controller->SetControlRotation(NewRotation);
+
+	// ����Ƿ��������
+	float AngleDifference = FMath::Abs(FRotator::NormalizeAxis(NewRotation.Yaw - CameraCorrectionTargetRotation.Yaw));
+	
+	if (AngleDifference < 2.0f || CorrectionDuration > 1.5f) // �ӽ�Ŀ����ת��ʱ
+	{
+		bIsCameraAutoCorrection = false;
+		UE_LOG(LogTemp, Warning, TEXT("Camera correction completed (Angle diff: %.1f degrees, Duration: %.1fs)"), 
+			AngleDifference, CorrectionDuration);
+		
+		// ������ɺ�����״̬
+		DelayedCorrectionTarget = nullptr;
+	}
+}
+
+void AMyCharacter::DelayedCameraCorrection()
+{
+	if (!DelayedCorrectionTarget || !Controller)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("DelayedCameraCorrection: Invalid target or controller"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("Executing delayed camera correction for target: %s"), *DelayedCorrectionTarget->GetName());
+
+	// ���㳯��Ŀ�����ת
+	FVector PlayerLocation = GetActorLocation();
+	FVector TargetLocation = DelayedCorrectionTarget->GetActorLocation();
+	FRotator TargetRotation = UKismetMathLibrary::FindLookAtRotation(PlayerLocation, TargetLocation);
+	
+	// ��������Զ�����
+	bIsCameraAutoCorrection = true;
+	CameraCorrectionStartTime = GetWorld()->GetTimeSeconds();
+	CameraCorrectionStartRotation = Controller->GetControlRotation();
+	
+	// �����������Ŀ����ת������������������ȫ��׼��
+	FRotator CurrentRotation = Controller->GetControlRotation();
+	float YawDifference = FRotator::NormalizeAxis(TargetRotation.Yaw - CurrentRotation.Yaw);
+	
+	// �����������ȣ�ֻ����һ���ֽǶ�
+	float CorrectionAmount = FMath::Sign(YawDifference) * FMath::Min(FMath::Abs(YawDifference), CAMERA_CORRECTION_OFFSET);
+	CameraCorrectionTargetRotation = FRotator(
+		CurrentRotation.Pitch,
+		CurrentRotation.Yaw + CorrectionAmount,
+		CurrentRotation.Roll
+	);
+
+	UE_LOG(LogTemp, Log, TEXT("Camera correction: Current=%.1f degrees, Target=%.1f degrees, Correction=%.1f degrees"), 
+		CurrentRotation.Yaw, TargetRotation.Yaw, CorrectionAmount);
+}
+
+void AMyCharacter::RestoreCameraFollowState()
+{
+	UE_LOG(LogTemp, Log, TEXT("Restoring camera follow state"));
+
+	// �ָ��������״̬
+	bShouldCameraFollowTarget = true;
+	bShouldCharacterRotateToTarget = true;
+	
+	// ֹͣ�Զ�����
+	bIsCameraAutoCorrection = false;
+	
+	// ����ӳ�����Ŀ��
+	DelayedCorrectionTarget = nullptr;
+
+	UE_LOG(LogTemp, Log, TEXT("Camera follow state restored"));
+}
+
+void AMyCharacter::DrawLockOnCursor()
+{
+	// ����������գ���Ϊ����ʹ��UMG UI������Debug����
+
+}

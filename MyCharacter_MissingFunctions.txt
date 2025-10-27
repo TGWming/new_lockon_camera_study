@@ -1,0 +1,238 @@
+﻿// ==================== 扇形锁定辅助函数实现 ====================
+
+bool AMyCharacter::HasCandidatesInSphere()
+{
+	// 确保候选列表是最新的
+	if (LockOnCandidates.Num() == 0)
+	{
+		FindLockOnCandidates();
+	}
+	
+	return LockOnCandidates.Num() > 0;
+}
+
+AActor* AMyCharacter::TryGetSectorLockTarget()
+{
+	if (TargetDetectionComponent)
+	{
+		return TargetDetectionComponent->TryGetSectorLockTarget();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("TryGetSectorLockTarget: TargetDetectionComponent is null!"));
+		return nullptr;
+	}
+}
+
+AActor* AMyCharacter::TryGetCameraCorrectionTarget()
+{
+	if (TargetDetectionComponent)
+	{
+		return TargetDetectionComponent->TryGetCameraCorrectionTarget();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("TryGetCameraCorrectionTarget: TargetDetectionComponent is null!"));
+		return nullptr;
+	}
+}
+
+void AMyCharacter::StartCameraCorrectionForTarget(AActor* Target)
+{
+	if (CameraControlComponent && Target)
+	{
+		CameraControlComponent->StartCameraCorrectionForTarget(Target);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("StartCameraCorrectionForTarget: CameraControlComponent or Target is null!"));
+	}
+}
+
+void AMyCharacter::StartCameraAutoCorrection(AActor* Target)
+{
+	if (CameraControlComponent && Target)
+	{
+		CameraControlComponent->StartCameraAutoCorrection(Target);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("StartCameraAutoCorrection: CameraControlComponent or Target is null!"));
+	}
+}
+
+void AMyCharacter::UpdateCameraAutoCorrection()
+{
+	if (CameraControlComponent)
+	{
+		CameraControlComponent->UpdateCameraAutoCorrection();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("UpdateCameraAutoCorrection: CameraControlComponent is null!"));
+	}
+}
+
+void AMyCharacter::DelayedCameraCorrection()
+{
+	if (CameraControlComponent)
+	{
+		CameraControlComponent->DelayedCameraCorrection();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("DelayedCameraCorrection: CameraControlComponent is null!"));
+	}
+}
+
+void AMyCharacter::RestoreCameraFollowState()
+{
+	if (CameraControlComponent)
+	{
+		CameraControlComponent->RestoreCameraFollowState();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("RestoreCameraFollowState: CameraControlComponent is null!"));
+	}
+}
+
+// ==================== 调试命令设置 ====================
+
+void AMyCharacter::SetupDebugCommands()
+{
+	UE_LOG(LogTemp, Warning, TEXT("=== DEBUG COMMANDS AVAILABLE ==="));
+	UE_LOG(LogTemp, Warning, TEXT("Press F: General debug info"));
+	UE_LOG(LogTemp, Warning, TEXT("Press G: Display target sizes"));
+	UE_LOG(LogTemp, Warning, TEXT("================================"));
+}
+
+// ==================== 编辑器实时更新接口实现 ====================
+
+#if WITH_EDITOR
+
+void AMyCharacter::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	
+	if (!PropertyChangedEvent.Property)
+		return;
+	
+	FName PropertyName = PropertyChangedEvent.Property->GetFName();
+	
+	// 处理相机配置结构体的修改
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(AMyCharacter, CameraSetupConfig))
+	{
+		// 如果相机组件存在，应用新配置
+		if (CameraBoom && FollowCamera)
+		{
+			ApplyCameraConfig(CameraSetupConfig);
+			
+			// 强制刷新编辑器视口
+			CameraBoom->MarkRenderStateDirty();
+			FollowCamera->MarkRenderStateDirty();
+			
+			UE_LOG(LogTemp, Warning, TEXT("Editor: Camera config struct updated - ArmLength=%.1f"), 
+				CameraSetupConfig.ArmLength);
+		}
+	}
+	
+	// 原始代码保留：锁定范围的处理
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(AMyCharacter, LockOnRange))
+	{
+		if (LockOnDetectionSphere)
+		{
+			LockOnDetectionSphere->SetSphereRadius(LockOnRange);
+			UE_LOG(LogTemp, Warning, TEXT("Editor: Detection sphere radius updated to %.1f"), 
+				LockOnRange);
+		}
+		
+		if (TargetDetectionComponent)
+		{
+			TargetDetectionComponent->LockOnSettings.LockOnRange = LockOnRange;
+		}
+	}
+}
+
+void AMyCharacter::PreviewCameraConfigInEditor()
+{
+	// 安全检查（安全宪法：防御性编程）
+	if (!CameraBoom || !FollowCamera)
+	{
+		UE_LOG(LogTemp, Error, TEXT("PreviewCameraConfig: Camera components not found"));
+		ValidateAndCacheComponents();
+		return;
+	}
+	
+	// 应用当前配置（使用已有的安全函数）
+	ApplyCameraConfig(CameraSetupConfig);
+	
+	// 强制刷新视口显示
+	CameraBoom->MarkRenderStateDirty();
+	FollowCamera->MarkRenderStateDirty();
+	
+	// 输出当前配置信息
+	UE_LOG(LogTemp, Warning, TEXT("=== Camera Config Preview Applied ==="));
+	UE_LOG(LogTemp, Warning, TEXT("Arm Length: %.1f"), CameraSetupConfig.ArmLength);
+	UE_LOG(LogTemp, Warning, TEXT("Initial Rotation: Pitch=%.1f, Yaw=%.1f, Roll=%.1f"), 
+		CameraSetupConfig.InitialRotation.Pitch,
+		CameraSetupConfig.InitialRotation.Yaw,
+		CameraSetupConfig.InitialRotation.Roll);
+	UE_LOG(LogTemp, Warning, TEXT("Socket Offset: X=%.1f, Y=%.1f, Z=%.1f"), 
+		CameraSetupConfig.SocketOffset.X,
+		CameraSetupConfig.SocketOffset.Y,
+		CameraSetupConfig.SocketOffset.Z);
+	UE_LOG(LogTemp, Warning, TEXT("Camera Lag: %s, Speed: %.1f"),
+		CameraSetupConfig.bEnableCameraLag ? TEXT("Enabled") : TEXT("Disabled"),
+		CameraSetupConfig.CameraLagSpeed);
+	UE_LOG(LogTemp, Warning, TEXT("====================================="));
+}
+
+void AMyCharacter::ResetCameraConfigInEditor()
+{
+	// 创建默认配置
+	FCameraSetupConfig DefaultConfig;
+	
+	// 保存旧配置用于日志
+	FCameraSetupConfig OldConfig = CameraSetupConfig;
+	
+	// 应用默认配置
+	CameraSetupConfig = DefaultConfig;
+	ApplyCameraConfig(CameraSetupConfig);
+	
+	UE_LOG(LogTemp, Warning, TEXT("Camera config reset: ArmLength %.1f -> %.1f"), 
+		OldConfig.ArmLength, DefaultConfig.ArmLength);
+}
+
+void AMyCharacter::PostEditMove(bool bFinished)
+{
+	Super::PostEditMove(bFinished);
+	
+	if (bFinished && bEnableCameraDebugLogs)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Editor: Character moved, final position: %s"), 
+			*GetActorLocation().ToString());
+	}
+}
+
+void AMyCharacter::SyncCameraConfigFromComponents()
+{
+	if (!CameraBoom || !FollowCamera)
+	{
+		UE_LOG(LogTemp, Error, TEXT("SyncCameraConfig: Camera components not available"));
+		return;
+	}
+	
+	// 从组件读取当前值并更新配置
+	CameraSetupConfig.ArmLength = CameraBoom->TargetArmLength;
+	CameraSetupConfig.InitialRotation = CameraBoom->GetRelativeRotation();
+	CameraSetupConfig.SocketOffset = FollowCamera->GetRelativeLocation();
+	CameraSetupConfig.bUsePawnControlRotation = CameraBoom->bUsePawnControlRotation;
+	CameraSetupConfig.bEnableCameraLag = CameraBoom->bEnableCameraLag;
+	CameraSetupConfig.CameraLagSpeed = CameraBoom->CameraLagSpeed;
+	
+	UE_LOG(LogTemp, Warning, TEXT("Synced config from components: ArmLength=%.1f, Pitch=%.1f"), 
+		CameraSetupConfig.ArmLength, CameraSetupConfig.InitialRotation.Pitch);
+}
+
+#endif // WITH_EDITOR
